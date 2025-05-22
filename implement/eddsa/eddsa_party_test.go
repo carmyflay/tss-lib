@@ -1,17 +1,15 @@
-package ecdsa
+package eddsa
 
 import (
 	"crypto/ecdsa"
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/bnb-chain/tss-lib/v2/common"
-	"github.com/bnb-chain/tss-lib/v2/ecdsa/keygen"
+	"github.com/bnb-chain/tss-lib/v2/eddsa/keygen"
 	"github.com/bnb-chain/tss-lib/v2/implement"
 	"github.com/bnb-chain/tss-lib/v2/tss"
 
@@ -35,22 +33,18 @@ func defaultTestConfig() testConfig {
 }
 
 // setupTestParties creates and initializes test parties
-func setupTestParties(t *testing.T, cfg testConfig) []*ECDSAParty {
-	parties := make([]*ECDSAParty, len(cfg.participants))
-	preParams := make([]*keygen.LocalPreParams, len(cfg.participants))
+func setupTestParties(t *testing.T, cfg testConfig) []*EDDSAParty {
+	parties := make([]*EDDSAParty, len(cfg.participants))
 
 	// Create parties and load pre-params
 	for i, id := range cfg.participants {
-		parties[i] = NewECDSAParty(id)
-		params, err := loadPreparams(id)
-		require.NoError(t, err, "Failed to load pre-params for %s", id)
-		preParams[i] = params
+		parties[i] = NewEDDSAParty(id)
 	}
 
 	// Initialize parties with senders
 	senders := senders(parties)
 	for i, party := range parties {
-		party.Init(cfg.participants, cfg.threshold, *preParams[i], senders[i])
+		party.Init(cfg.participants, cfg.threshold, senders[i])
 		go party.NotifyError()
 	}
 
@@ -58,13 +52,13 @@ func setupTestParties(t *testing.T, cfg testConfig) []*ECDSAParty {
 }
 
 // cleanupTestParties ensures proper cleanup of test resources
-func cleanupTestParties(parties []*ECDSAParty) {
+func cleanupTestParties(parties []*EDDSAParty) {
 	for _, party := range parties {
 		party.Close()
 	}
 }
 
-func TestECDSAParty(t *testing.T) {
+func TestEDDSAParty(t *testing.T) {
 	cfg := defaultTestConfig()
 
 	// Setup test parties
@@ -91,13 +85,13 @@ func TestECDSAParty(t *testing.T) {
 	// defer cleanupTestParties(reshareParties)
 }
 
-func testResharing(t *testing.T, oldParties []*ECDSAParty, cfg testConfig) []*ECDSAParty {
+func testResharing(t *testing.T, oldParties []*EDDSAParty, cfg testConfig) []*EDDSAParty {
 	// Create new parties for resharing
 	newParticipants := []string{"party1-reshare", "party2-reshare", "party3-reshare"}
-	newParties := make([]*ECDSAParty, len(newParticipants))
+	newParties := make([]*EDDSAParty, len(newParticipants))
 
 	for i, id := range newParticipants {
-		newParties[i] = NewECDSAParty(id)
+		newParties[i] = NewEDDSAParty(id)
 	}
 
 	// Combine old and new parties for resharing
@@ -106,15 +100,11 @@ func testResharing(t *testing.T, oldParties []*ECDSAParty, cfg testConfig) []*EC
 
 	// Initialize resharing for all parties
 	for i, party := range allParties {
-		preParams, err := loadPreparams(party.PartyID.Id)
-		require.NoError(t, err, "Failed to load pre-params for %s", party.PartyID.Id)
-
 		party.InitReshare(
 			cfg.participants,
 			newParticipants,
 			cfg.threshold,
 			1, // new threshold
-			*preParams,
 			reshareSenders[i],
 		)
 		go party.NotifyError()
@@ -131,10 +121,7 @@ func testResharing(t *testing.T, oldParties []*ECDSAParty, cfg testConfig) []*EC
 	// Initialize new parties for signing
 	newSignSenders := senders(newParties)
 	for i, party := range newParties {
-		preParams, err := loadPreparams(party.PartyID.Id)
-		require.NoError(t, err, "Failed to load pre-params for %s", party.PartyID.Id)
-
-		party.Init(newParticipants, 1, *preParams, newSignSenders[i])
+		party.Init(newParticipants, 1, newSignSenders[i])
 		party.SetShareData(reshareShares[party.PartyID.Id])
 	}
 
@@ -146,14 +133,14 @@ func testResharing(t *testing.T, oldParties []*ECDSAParty, cfg testConfig) []*EC
 	return newParties
 }
 
-func keygenAll(parties []*ECDSAParty) map[string][]byte {
+func keygenAll(parties []*EDDSAParty) map[string][]byte {
 	wg := sync.WaitGroup{}
 	wg.Add(len(parties))
 	shares := make(map[string][]byte)
 	var mu sync.Mutex
 
 	for _, party := range parties {
-		go func(p *ECDSAParty) {
+		go func(p *EDDSAParty) {
 			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
@@ -177,14 +164,14 @@ func keygenAll(parties []*ECDSAParty) map[string][]byte {
 	return shares
 }
 
-func signAll(parties []*ECDSAParty, msg []byte) [][]byte {
+func signAll(parties []*EDDSAParty, msg []byte) [][]byte {
 	wg := sync.WaitGroup{}
 	wg.Add(len(parties))
 	sigs := make([][]byte, 0, len(parties))
 	var mu sync.Mutex
 
 	for _, party := range parties {
-		go func(p *ECDSAParty) {
+		go func(p *EDDSAParty) {
 			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
@@ -208,14 +195,14 @@ func signAll(parties []*ECDSAParty, msg []byte) [][]byte {
 	return sigs
 }
 
-func reshareAll(parties []*ECDSAParty) map[string][]byte {
+func reshareAll(parties []*EDDSAParty) map[string][]byte {
 	wg := sync.WaitGroup{}
 	wg.Add(len(parties))
 	shares := make(map[string][]byte)
 	var mu sync.Mutex
 
 	for _, party := range parties {
-		go func(p *ECDSAParty) {
+		go func(p *EDDSAParty) {
 			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
@@ -239,7 +226,7 @@ func reshareAll(parties []*ECDSAParty) map[string][]byte {
 	return shares
 }
 
-func senders(parties []*ECDSAParty) []implement.Sender {
+func senders(parties []*EDDSAParty) []implement.Sender {
 	senders := make([]implement.Sender, len(parties))
 	for i, src := range parties {
 		src := src
@@ -281,7 +268,7 @@ func senders(parties []*ECDSAParty) []implement.Sender {
 	return senders
 }
 
-func senderForReshare(parties []*ECDSAParty) []implement.Sender {
+func senderForReshare(parties []*EDDSAParty) []implement.Sender {
 	senders := make([]implement.Sender, len(parties))
 	for i, src := range parties {
 		src := src
@@ -296,8 +283,9 @@ func senderForReshare(parties []*ECDSAParty) []implement.Sender {
 				log.Printf("Party %s failed to classify message: %v", src.PartyID.Id, err)
 				return
 			}
-			log.Printf("Party %s received message, round: %d, isBroadcast: %t", src.PartyID.Id, round, isBroadcast)
-
+			if round != 7 {
+				log.Printf("Party %s received message, round: %d, isBroadcast: %t", src.PartyID.Id, round, isBroadcast)
+			}
 			to := msg.GetTo()
 			if to == nil {
 				log.Printf("Warning: Party %s message has nil recipients", src.PartyID.Id)
@@ -316,38 +304,14 @@ func senderForReshare(parties []*ECDSAParty) []implement.Sender {
 	return senders
 }
 
-func loadPreparams(partyID string) (*keygen.LocalPreParams, error) {
-	// Try to read existing file
-	data, err := os.ReadFile("preparams_" + partyID + ".json")
-	if err == nil {
-		var params *keygen.LocalPreParams
-		if err := json.Unmarshal(data, &params); err == nil {
-			return params, nil
-		}
-	}
-
-	// Generate new parameters
-	params, err := keygen.GeneratePreParams(1 * time.Minute)
-	if err != nil {
-		return nil, err
-	}
-
-	// Save the new parameters
-	if data, err := json.Marshal(params); err == nil {
-		os.WriteFile("preparams_"+partyID+".json", data, 0644)
-	}
-
-	return params, nil
-}
-
 func ThresholdPK(shareData *keygen.LocalPartySaveData) ([]byte, error) {
 	if shareData == nil {
 		return nil, fmt.Errorf("must call SetShareData() before attempting to sign")
 	}
 
-	pk := shareData.ECDSAPub
+	pk := shareData.EDDSAPub
 	ecdsaPK := &ecdsa.PublicKey{
-		Curve: shareData.ECDSAPub.Curve(),
+		Curve: shareData.EDDSAPub.Curve(),
 		X:     pk.X(),
 		Y:     pk.Y(),
 	}
