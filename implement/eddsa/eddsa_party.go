@@ -1,11 +1,9 @@
 package eddsa
 
 import (
-	"crypto/elliptic"
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/big"
 
 	"github.com/bnb-chain/tss-lib/v2/common"
 	"github.com/bnb-chain/tss-lib/v2/eddsa/keygen"
@@ -17,49 +15,23 @@ import (
 
 type EDDSAParty struct {
 	implement.BaseParty
-	shareData     *keygen.LocalPartySaveData
-	reshareParams *tss.ReSharingParameters
-	curve         elliptic.Curve
+	shareData *keygen.LocalPartySaveData
 }
 
 func NewEDDSAParty(partyID string) *EDDSAParty {
-	return &EDDSAParty{
+	party := &EDDSAParty{
 		BaseParty: *implement.NewBaseParty(partyID),
-		curve:     tss.Edwards(),
 	}
+	party.SetCurve(tss.Edwards())
+	return party
 }
 
 func (p *EDDSAParty) Init(participants []string, threshold int, sender implement.Sender) {
-	sortedPartyIDs := implement.CreateSortedPartyIDs(participants)
-	// Update the partyID index
-	p.PartyID.Index = implement.GetLocalPartyIndex(sortedPartyIDs, p.PartyID.Id)
-	ctx := tss.NewPeerContext(sortedPartyIDs)
-	p.Params = tss.NewParameters(p.curve, ctx, p.PartyID, len(participants), threshold)
-	p.SetSender(sender)
-	go p.SendMessages()
+	p.BaseParty.Init(participants, threshold, sender)
 }
 
 func (p *EDDSAParty) InitReshare(oldParticipants []string, newParticipants []string, oldThreshold int, newThreshold int, sender implement.Sender) {
-	oldSortedPartyIDs := implement.CreateSortedPartyIDs(oldParticipants)
-	newSortedPartyIDs := implement.CreateSortedPartyIDs(newParticipants)
-
-	// Only update index for new parties
-	if p.PartyID.Index == -1 {
-		p.PartyID.Index = implement.GetLocalPartyIndex(newSortedPartyIDs, p.PartyID.Id)
-	}
-
-	p.reshareParams = tss.NewReSharingParameters(
-		p.curve,
-		tss.NewPeerContext(oldSortedPartyIDs),
-		tss.NewPeerContext(newSortedPartyIDs),
-		p.PartyID,
-		len(oldParticipants),
-		oldThreshold,
-		len(newParticipants),
-		newThreshold,
-	)
-	p.SetSender(sender)
-	go p.SendMessages()
+	p.BaseParty.InitReshare(oldParticipants, newParticipants, oldThreshold, newThreshold, sender)
 }
 
 func (p *EDDSAParty) Keygen(done func(*keygen.LocalPartySaveData)) {
@@ -83,7 +55,9 @@ func (p *EDDSAParty) Keygen(done func(*keygen.LocalPartySaveData)) {
 			}
 			return
 		case msg := <-p.In:
-			p.processMsg(localParty, msg)
+			if err := p.ProcessMsg(localParty, msg); err != nil {
+				p.ErrChan <- err
+			}
 		}
 	}
 }
@@ -98,7 +72,7 @@ func (p *EDDSAParty) Sign(msg []byte, done func(*common.SignatureData)) {
 	}
 
 	endCh := make(chan *common.SignatureData, 1)
-	msgToSign := hashToInt(msg, p.curve)
+	msgToSign := p.HashToInt(msg)
 	localParty := signing.NewLocalParty(msgToSign, p.Params, *p.shareData, p.Out, endCh)
 
 	go func() {
@@ -116,7 +90,9 @@ func (p *EDDSAParty) Sign(msg []byte, done func(*common.SignatureData)) {
 			}
 			return
 		case msg := <-p.In:
-			p.processMsg(localParty, msg)
+			if err := p.ProcessMsg(localParty, msg); err != nil {
+				p.ErrChan <- err
+			}
 		}
 	}
 }
@@ -127,12 +103,12 @@ func (p *EDDSAParty) Reshare(done func(*keygen.LocalPartySaveData)) {
 
 	// Initialize share data for new participants
 	if p.shareData == nil {
-		data := keygen.NewLocalPartySaveData(p.reshareParams.NewPartyCount())
+		data := keygen.NewLocalPartySaveData(p.ReshareParams.NewPartyCount())
 		p.shareData = &data
 	}
 
 	endCh := make(chan *keygen.LocalPartySaveData, 1)
-	localParty := resharing.NewLocalParty(p.reshareParams, *p.shareData, p.Out, endCh)
+	localParty := resharing.NewLocalParty(p.ReshareParams, *p.shareData, p.Out, endCh)
 
 	go func() {
 		if err := localParty.Start(); err != nil {
@@ -148,23 +124,11 @@ func (p *EDDSAParty) Reshare(done func(*keygen.LocalPartySaveData)) {
 			}
 			return
 		case msg := <-p.In:
-			if err := p.processMsg(localParty, msg); err != nil {
+			if err := p.ProcessMsg(localParty, msg); err != nil {
 				p.ErrChan <- err
 			}
 		}
 	}
-}
-
-func (p *EDDSAParty) processMsg(localParty tss.Party, msg tss.Message) error {
-	bz, _, err := msg.WireBytes()
-	if err != nil {
-		return err
-	}
-	ok, err := localParty.UpdateFromBytes(bz, msg.GetFrom(), msg.IsBroadcast())
-	if !ok {
-		return err
-	}
-	return nil
 }
 
 func (p *EDDSAParty) SetShareData(shareData []byte) {
@@ -183,29 +147,13 @@ func (p *EDDSAParty) SetShareData(shareData []byte) {
 	}
 
 	// Set curve for all points
-	localSaveData.EDDSAPub.SetCurve(p.curve)
+	localSaveData.EDDSAPub.SetCurve(p.GetCurve())
 	for _, xj := range localSaveData.BigXj {
 		if xj == nil {
 			p.ErrChan <- fmt.Errorf("share data has nil public share")
 		}
-		xj.SetCurve(p.curve)
+		xj.SetCurve(p.GetCurve())
 	}
 
 	p.shareData = &localSaveData
-}
-
-// hashToInt is taken as-is from the Go ECDSA standard library
-func hashToInt(hash []byte, c elliptic.Curve) *big.Int {
-	orderBits := c.Params().N.BitLen()
-	orderBytes := (orderBits + 7) / 8
-	if len(hash) > orderBytes {
-		hash = hash[:orderBytes]
-	}
-
-	ret := new(big.Int).SetBytes(hash)
-	excess := len(hash)*8 - orderBits
-	if excess > 0 {
-		ret.Rsh(ret, uint(excess))
-	}
-	return ret
 }
