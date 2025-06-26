@@ -1,0 +1,8 @@
+with dlnproofc
+ok      github.com/bnb-chain/tss-lib/v2/implement/ecdsa 28.781s
+without dlnproofc
+ok      github.com/bnb-chain/tss-lib/v2/implement/ecdsa 65.809s
+
+
+default
+ok      github.com/bnb-chain/tss-lib/v2/implement/ecdsa 80.706s
