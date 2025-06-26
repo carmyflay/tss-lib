@@ -175,16 +175,35 @@ func DLNProve(
 	}
 	defer C.free(unsafe.Pointer(tPtrsC))
 
-	// Create pointer arrays in C memory
+	// Create pointer arrays in C memory, allocate each output buffer in C
 	alphaPtrsSlice := (*[ITERATIONS]*C.uint8_t)(unsafe.Pointer(alphaPtrsC))
 	tPtrsSlice := (*[ITERATIONS]*C.uint8_t)(unsafe.Pointer(tPtrsC))
 
 	for i := 0; i < ITERATIONS; i++ {
-		alphaOut[i] = make([]byte, outLen)
-		tOut[i] = make([]byte, outLen)
-		alphaPtrsSlice[i] = (*C.uint8_t)(unsafe.Pointer(&alphaOut[i][0]))
-		tPtrsSlice[i] = (*C.uint8_t)(unsafe.Pointer(&tOut[i][0]))
+		alphaPtrsSlice[i] = (*C.uint8_t)(C.malloc(C.size_t(outLen)))
+		if alphaPtrsSlice[i] == nil {
+			for j := 0; j < i; j++ {
+				C.free(unsafe.Pointer(alphaPtrsSlice[j]))
+			}
+			return nil, nil, errors.New("failed to allocate C memory for alphaOut element")
+		}
+		tPtrsSlice[i] = (*C.uint8_t)(C.malloc(C.size_t(outLen)))
+		if tPtrsSlice[i] == nil {
+			for j := 0; j <= i; j++ {
+				C.free(unsafe.Pointer(alphaPtrsSlice[j]))
+			}
+			for j := 0; j < i; j++ {
+				C.free(unsafe.Pointer(tPtrsSlice[j]))
+			}
+			return nil, nil, errors.New("failed to allocate C memory for tOut element")
+		}
 	}
+	defer func() {
+		for i := 0; i < ITERATIONS; i++ {
+			C.free(unsafe.Pointer(alphaPtrsSlice[i]))
+			C.free(unsafe.Pointer(tPtrsSlice[i]))
+		}
+	}()
 
 	h1Ptr, h1Len := cBytes(h1)
 	xPtr, xLen := cBytes(x)
@@ -209,5 +228,20 @@ func DLNProve(
 		return nil, nil, errors.New("dln_prove failed")
 	}
 
+	// Copy data from C memory to Go slices
+	for i := 0; i < ITERATIONS; i++ {
+		alphaOut[i] = goBytes(unsafe.Pointer(alphaPtrsSlice[i]), outLen)
+		tOut[i] = goBytes(unsafe.Pointer(tPtrsSlice[i]), outLen)
+	}
+
 	return alphaOut, tOut, nil
+}
+
+func goBytes(ptr unsafe.Pointer, length int) []byte {
+	if ptr == nil || length == 0 {
+		return nil
+	}
+	b := make([]byte, length)
+	copy(b, (*[1 << 30]byte)(ptr)[:length:length])
+	return b
 }

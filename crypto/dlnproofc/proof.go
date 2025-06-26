@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+
+	cmts "github.com/bnb-chain/tss-lib/v2/crypto/commitments"
 )
 
 const Iterations = 128 // Match the C wrapper's ITERATIONS
@@ -99,13 +101,12 @@ func (p *Proof) Verify(h1, h2, N *big.Int) bool {
 }
 
 // Helper function to pad byte slices to ensure consistent length
-func padBytes(data []byte, length int) []byte {
-	if len(data) >= length {
-		return data
+func padBytes(b []byte, length int) []byte {
+	if len(b) >= length {
+		return b
 	}
-
 	padded := make([]byte, length)
-	copy(padded[length-len(data):], data)
+	copy(padded[length-len(b):], b)
 	return padded
 }
 
@@ -208,4 +209,63 @@ func (p *Proof) VerifyWithPadding(h1, h2, N *big.Int) bool {
 	}
 
 	return valid
+}
+
+func (p *Proof) Serialize() ([][]byte, error) {
+	cb := cmts.NewBuilder()
+	cb = cb.AddPart(p.Alpha[:])
+	cb = cb.AddPart(p.T[:])
+	ints, err := cb.Secrets()
+	if err != nil {
+		return nil, err
+	}
+	// Find the max length for padding
+	maxLen := 0
+	for _, part := range ints {
+		if part != nil && len(part.Bytes()) > maxLen {
+			maxLen = len(part.Bytes())
+		}
+	}
+	bzs := make([][]byte, len(ints))
+	for i, part := range ints {
+		if part == nil {
+			bzs[i] = []byte{}
+			continue
+		}
+		bzs[i] = padBytes(part.Bytes(), maxLen)
+	}
+	return bzs, nil
+}
+
+func UnmarshalDLNProof(bzs [][]byte) (*Proof, error) {
+	if len(bzs) == 0 {
+		return nil, fmt.Errorf("UnmarshalDLNProof: input slice is empty")
+	}
+	// Check all slices are the same length
+	expectedLen := len(bzs[0])
+	for i, bz := range bzs {
+		if len(bz) != expectedLen {
+			return nil, fmt.Errorf("UnmarshalDLNProof: element %d has length %d, expected %d", i, len(bz), expectedLen)
+		}
+	}
+
+	bis := make([]*big.Int, len(bzs))
+	for i := range bis {
+		bis[i] = new(big.Int).SetBytes(bzs[i])
+	}
+	parsed, err := cmts.ParseSecrets(bis)
+	if err != nil {
+		return nil, err
+	}
+	if len(parsed) != 2 {
+		return nil, fmt.Errorf("UnmarshalDLNProof expected %d parts but got %d", 2, len(parsed))
+	}
+	pf := new(Proof)
+	if len1 := copy(pf.Alpha[:], parsed[0]); len1 != Iterations {
+		return nil, fmt.Errorf("UnmarshalDLNProof expected %d but copied %d", Iterations, len1)
+	}
+	if len2 := copy(pf.T[:], parsed[1]); len2 != Iterations {
+		return nil, fmt.Errorf("UnmarshalDLNProof expected %d but copied %d", Iterations, len2)
+	}
+	return pf, nil
 }

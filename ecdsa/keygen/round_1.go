@@ -14,7 +14,7 @@ import (
 	"github.com/bnb-chain/tss-lib/v2/common"
 	"github.com/bnb-chain/tss-lib/v2/crypto"
 	cmts "github.com/bnb-chain/tss-lib/v2/crypto/commitments"
-	"github.com/bnb-chain/tss-lib/v2/crypto/dlnproof"
+	dlnproof "github.com/bnb-chain/tss-lib/v2/crypto/dlnproofc"
 	"github.com/bnb-chain/tss-lib/v2/crypto/vss"
 	"github.com/bnb-chain/tss-lib/v2/tss"
 )

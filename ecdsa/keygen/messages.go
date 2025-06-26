@@ -7,13 +7,14 @@
 package keygen
 
 import (
+	"math/big"
+
 	"github.com/bnb-chain/tss-lib/v2/crypto/facproof"
 	"github.com/bnb-chain/tss-lib/v2/crypto/modproof"
-	"math/big"
 
 	"github.com/bnb-chain/tss-lib/v2/common"
 	cmt "github.com/bnb-chain/tss-lib/v2/crypto/commitments"
-	"github.com/bnb-chain/tss-lib/v2/crypto/dlnproof"
+	dlnproof "github.com/bnb-chain/tss-lib/v2/crypto/dlnproofc"
 	"github.com/bnb-chain/tss-lib/v2/crypto/paillier"
 	"github.com/bnb-chain/tss-lib/v2/crypto/vss"
 	"github.com/bnb-chain/tss-lib/v2/tss"
