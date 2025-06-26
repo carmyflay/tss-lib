@@ -42,6 +42,8 @@ func (p *ECDSAParty) Keygen(done func(*keygen.LocalPartySaveData)) {
 	defer log.Printf("Party %s ending keygen\n", p.PartyID.Id)
 
 	endCh := make(chan *keygen.LocalPartySaveData, 1)
+	// p.Params.SetNoProofMod()
+	// p.Params.SetNoProofFac()
 	localParty := keygen.NewLocalParty(p.Params, p.Out, endCh, p.preParams)
 
 	go func() {

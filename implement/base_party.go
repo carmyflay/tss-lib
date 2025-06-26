@@ -2,6 +2,7 @@ package implement
 
 import (
 	"crypto/elliptic"
+	"fmt"
 	"log"
 	"math/big"
 
@@ -27,8 +28,9 @@ type BaseParty struct {
 }
 
 func NewBaseParty(partyID string) *BaseParty {
+	moniker := fmt.Sprintf("%s:%s", partyID, "keygen")
 	return &BaseParty{
-		PartyID:   tss.NewPartyID(partyID, partyID, new(big.Int).SetBytes([]byte(partyID))),
+		PartyID:   tss.NewPartyID(partyID, moniker, new(big.Int).SetBytes([]byte(partyID))),
 		In:        make(chan tss.Message, defaultChanSize),
 		Out:       make(chan tss.Message, defaultChanSize),
 		ErrChan:   make(chan error, defaultChanSize),
@@ -51,7 +53,7 @@ func (p *BaseParty) GetCurve() elliptic.Curve {
 func CreateSortedPartyIDs(participants []string) tss.SortedPartyIDs {
 	partyIDs := make(tss.UnSortedPartyIDs, len(participants))
 	for i, participant := range participants {
-		partyIDs[i] = tss.NewPartyID(participant, participant, new(big.Int).SetBytes([]byte(participant)))
+		partyIDs[i] = tss.NewPartyID(participant, fmt.Sprintf("%s:%s", participant, "keygen"), new(big.Int).SetBytes([]byte(participant)))
 	}
 	return tss.SortPartyIDs(partyIDs)
 }

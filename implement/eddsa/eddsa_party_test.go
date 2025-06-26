@@ -323,3 +323,25 @@ func encodeS256PubKey(pubKey *ecdsa.PublicKey) ([]byte, error) {
 	publicKeyBytes := append(pubKey.X.Bytes(), pubKey.Y.Bytes()...)
 	return publicKeyBytes, nil
 }
+
+func TestEDDSA_Generate10IndependentKeys(t *testing.T) {
+	cfg := testConfig{
+		threshold:     1,
+		participants:  []string{"node1", "node2", "node3"},
+		messageToSign: []byte("test"),
+	}
+
+	keySet := make(map[string]struct{})
+
+	for i := 0; i < 10; i++ {
+		parties := setupTestParties(t, cfg)
+		shares := keygenAll(parties)
+		for _, share := range shares {
+			keySet[string(share)] = struct{}{}
+		}
+		cleanupTestParties(parties)
+	}
+
+	require.Equal(t, 10, len(keySet)/3, "Expected 10 unique key shares, got %d", len(keySet))
+	t.Log("Generated 10 independent EDDSA key shares successfully")
+}

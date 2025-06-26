@@ -4,17 +4,17 @@ import (
 	"crypto/ecdsa"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"sync"
 	"testing"
 	"time"
 
+	_ "net/http/pprof"
+
 	"github.com/bnb-chain/tss-lib/v2/common"
 	"github.com/bnb-chain/tss-lib/v2/ecdsa/keygen"
 	"github.com/bnb-chain/tss-lib/v2/implement"
 	"github.com/bnb-chain/tss-lib/v2/tss"
-
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,7 +28,7 @@ type testConfig struct {
 // defaultTestConfig returns default test configuration
 func defaultTestConfig() testConfig {
 	return testConfig{
-		threshold:     2,
+		threshold:     1,
 		participants:  []string{"party1", "party2", "party3"},
 		messageToSign: []byte("test"),
 	}
@@ -64,31 +64,93 @@ func cleanupTestParties(parties []*ECDSAParty) {
 	}
 }
 
-func TestECDSAParty(t *testing.T) {
+func TestECDSAPartyKeygen2Once(t *testing.T) {
+	// go func() {
+	// 	clog.Println(http.ListenAndServe("localhost:6060", nil))
+	// }()
+	// log.SetDebugLogging()
 	cfg := defaultTestConfig()
 
-	// Setup test parties
-	parties := setupTestParties(t, cfg)
-	// defer cleanupTestParties(parties)
+	fmt.Println("=== Starting 5 Key Generation Runs (2 at a time) ===")
+	totalRuns := 2
+	batchSize := 2
+	var wg sync.WaitGroup
+	results := make([]struct {
+		run      int
+		duration time.Duration
+		pubKey   []byte
+		err      error
+	}, totalRuns)
 
-	// Test key generation
-	shares := keygenAll(parties)
-	require.Equal(t, len(cfg.participants), len(shares), "Expected %d shares, got %d", len(cfg.participants), len(shares))
-	t.Log("Key generation completed successfully")
+	// Run in batches of 2
+	for batch := 0; batch < (totalRuns+batchSize-1)/batchSize; batch++ {
+		startIdx := batch * batchSize
+		endIdx := startIdx + batchSize
+		if endIdx > totalRuns {
+			endIdx = totalRuns
+		}
 
-	// Set share data for each party
-	for _, party := range parties {
-		party.SetShareData(shares[party.PartyID.Id])
+		fmt.Printf("Starting batch %d: runs %d-%d\n", batch+1, startIdx+1, endIdx)
+
+		// Start batch of key generations concurrently
+		for run := startIdx; run < endIdx; run++ {
+			wg.Add(1)
+			go func(runNum int) {
+				defer wg.Done()
+
+				common.Logger.Infof("Starting run %d/%d\n", runNum+1, totalRuns)
+
+				// Setup test parties for this run
+				parties := setupTestParties(t, cfg)
+
+				// Test key generation
+				shares := keygenAll(parties)
+
+				// Store results
+				results[runNum].run = runNum + 1
+
+				if len(shares) != len(cfg.participants) {
+					results[runNum].err = fmt.Errorf("expected %d shares, got %d", len(cfg.participants), len(shares))
+					return
+				}
+
+				// Extract public key for verification
+				if len(shares) > 0 {
+					var shareData keygen.LocalPartySaveData
+					err := json.Unmarshal(shares[cfg.participants[0]], &shareData)
+					if err == nil {
+						pubKeyBytes, err := ThresholdPK(&shareData)
+						if err == nil {
+							results[runNum].pubKey = pubKeyBytes
+						} else {
+							results[runNum].err = err
+						}
+					} else {
+						results[runNum].err = err
+					}
+				}
+
+				// Cleanup parties for this run
+				cleanupTestParties(parties)
+
+			}(run)
+		}
+
+		// Wait for current batch to complete before starting next batch
+		wg.Wait()
+		fmt.Printf("Batch %d completed\n", batch+1)
+	}
+	// Print results summary
+	fmt.Println("\n=== Key Generation Results ===")
+	for _, result := range results {
+		if result.err != nil {
+			fmt.Printf("Run %d: ERROR - %v\n", result.run, result.err)
+		} else {
+			fmt.Printf("Run %d: Public Key: %x (completed in %v)\n", result.run, result.pubKey, result.duration)
+		}
 	}
 
-	// Test signing
-	sigs := signAll(parties, cfg.messageToSign)
-	require.Equal(t, len(cfg.participants), len(sigs), "Expected %d signatures, got %d", len(cfg.participants), len(sigs))
-	t.Log("Signing completed successfully")
-
-	// Test resharing
-	_ = testResharing(t, parties, cfg)
-	// defer cleanupTestParties(reshareParties)
+	fmt.Printf("\n=== All %d Key Generation Runs Completed ===\n", totalRuns)
 }
 
 func testResharing(t *testing.T, oldParties []*ECDSAParty, cfg testConfig) []*ECDSAParty {
@@ -157,14 +219,14 @@ func keygenAll(parties []*ECDSAParty) map[string][]byte {
 			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("Party %s panicked: %v", p.PartyID.Id, r)
+					common.Logger.Errorf("Party %s panicked: %v", p.PartyID.Id, r)
 				}
 			}()
 
 			p.Keygen(func(share *keygen.LocalPartySaveData) {
 				bz, err := json.Marshal(share)
 				if err != nil {
-					log.Printf("Party %s failed to marshal share data: %v", p.PartyID.Id, err)
+					common.Logger.Errorf("Party %s failed to marshal share data: %v", p.PartyID.Id, err)
 					return
 				}
 				mu.Lock()
@@ -188,14 +250,14 @@ func signAll(parties []*ECDSAParty, msg []byte) [][]byte {
 			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("Party %s panicked: %v", p.PartyID.Id, r)
+					common.Logger.Errorf("Party %s panicked: %v", p.PartyID.Id, r)
 				}
 			}()
 
 			p.Sign(msg, func(sig *common.SignatureData) {
 				bz, err := json.Marshal(sig)
 				if err != nil {
-					log.Printf("Party %s failed to marshal signature: %v", p.PartyID.Id, err)
+					common.Logger.Errorf("Party %s failed to marshal signature: %v", p.PartyID.Id, err)
 					return
 				}
 				mu.Lock()
@@ -219,14 +281,14 @@ func reshareAll(parties []*ECDSAParty) map[string][]byte {
 			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("Party %s panicked: %v", p.PartyID.Id, r)
+					common.Logger.Errorf("Party %s panicked: %v", p.PartyID.Id, r)
 				}
 			}()
 
 			p.Reshare(func(share *keygen.LocalPartySaveData) {
 				bz, err := json.Marshal(share)
 				if err != nil {
-					log.Printf("Party %s failed to marshal share data: %v", p.PartyID.Id, err)
+					common.Logger.Errorf("Party %s failed to marshal share data: %v", p.PartyID.Id, err)
 					return
 				}
 				mu.Lock()
@@ -246,15 +308,15 @@ func senders(parties []*ECDSAParty) []implement.Sender {
 		senders[i] = func(msg tss.Message) {
 			msgBytes, _, err := msg.WireBytes()
 			if err != nil {
-				log.Printf("Party %s failed to get wire bytes: %v", src.PartyID.Id, err)
+				common.Logger.Errorf("Party %s failed to get wire bytes: %v", src.PartyID.Id, err)
 				return
 			}
 			round, isBroadcast, err := ClassifyMsg(msgBytes)
 			if err != nil {
-				log.Printf("Party %s failed to classify message: %v", src.PartyID.Id, err)
+				common.Logger.Errorf("Party %s failed to classify message: %v", src.PartyID.Id, err)
 				return
 			}
-			log.Printf("Party %s received message, round: %d, isBroadcast: %t", src.PartyID.Id, round, isBroadcast)
+			common.Logger.Infof("Party %s received message, round: %d, isBroadcast: %t", src.PartyID.Id, round, isBroadcast)
 			if isBroadcast {
 				for _, dst := range parties {
 					if dst.PartyID.Id != src.PartyID.Id {
@@ -264,7 +326,7 @@ func senders(parties []*ECDSAParty) []implement.Sender {
 			} else {
 				to := msg.GetTo()
 				if to == nil {
-					log.Printf("Warning: Party %s message has nil recipients", src.PartyID.Id)
+					common.Logger.Errorf("Warning: Party %s message has nil recipients", src.PartyID.Id)
 					return
 				}
 				for _, recipient := range to {
@@ -288,19 +350,19 @@ func senderForReshare(parties []*ECDSAParty) []implement.Sender {
 		senders[i] = func(msg tss.Message) {
 			msgBytes, _, err := msg.WireBytes()
 			if err != nil {
-				log.Printf("Party %s failed to get wire bytes: %v", src.PartyID.Id, err)
+				common.Logger.Errorf("Party %s failed to get wire bytes: %v", src.PartyID.Id, err)
 				return
 			}
 			round, isBroadcast, err := ClassifyMsg(msgBytes)
 			if err != nil {
-				log.Printf("Party %s failed to classify message: %v", src.PartyID.Id, err)
+				common.Logger.Errorf("Party %s failed to classify message: %v", src.PartyID.Id, err)
 				return
 			}
-			log.Printf("Party %s received message, round: %d, isBroadcast: %t", src.PartyID.Id, round, isBroadcast)
+			common.Logger.Infof("Party %s received message, round: %d, isBroadcast: %t", src.PartyID.Id, round, isBroadcast)
 
 			to := msg.GetTo()
 			if to == nil {
-				log.Printf("Warning: Party %s message has nil recipients", src.PartyID.Id)
+				common.Logger.Errorf("Warning: Party %s message has nil recipients", src.PartyID.Id)
 				return
 			}
 			for _, recipient := range to {

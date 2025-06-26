@@ -18,6 +18,7 @@ import (
 
 	"github.com/bnb-chain/tss-lib/v2/common"
 	cmts "github.com/bnb-chain/tss-lib/v2/crypto/commitments"
+	"github.com/ncw/gmp"
 )
 
 const Iterations = 128
@@ -29,73 +30,88 @@ type (
 	}
 )
 
-var one = big.NewInt(1)
+// var one = big.NewInt(1)
 
 func NewDLNProof(h1, h2, x, p, q, N *big.Int, rand io.Reader) *Proof {
-	pMulQ := new(big.Int).Mul(p, q)
-	modN, modPQ := common.ModInt(N), common.ModInt(pMulQ)
-	a := make([]*big.Int, Iterations)
+	gH1 := toGMP(h1)
+	gX := toGMP(x)
+	gP := toGMP(p)
+	gQ := toGMP(q)
+	gN := toGMP(N)
+
+	var gPQ gmp.Int
+	gPQ.Mul(gP, gQ)
+	pqBig := new(big.Int).SetBytes(gPQ.Bytes())
+
+	a := make([]*gmp.Int, Iterations)
 	alpha := [Iterations]*big.Int{}
-	for i := range alpha {
-		a[i] = common.GetRandomPositiveInt(rand, pMulQ)
-		alpha[i] = modN.Exp(h1, a[i])
+
+	// Reusable vars
+	var rBig *big.Int
+	var exp gmp.Int
+
+	for i := 0; i < Iterations; i++ {
+		rBig = common.GetRandomPositiveInt(rand, pqBig)
+		a[i] = toGMP(rBig)
+		alpha[i] = toBig(exp.Exp(gH1, a[i], gN))
 	}
-	msg := append([]*big.Int{h1, h2, N}, alpha[:]...)
+
+	// Hash challenge
+	msg := make([]*big.Int, 3+Iterations)
+	msg[0], msg[1], msg[2] = h1, h2, N
+	copy(msg[3:], alpha[:])
 	c := common.SHA512_256i(msg...)
+
 	t := [Iterations]*big.Int{}
-	cIBI := new(big.Int)
-	for i := range t {
-		cI := c.Bit(i)
-		cIBI = cIBI.SetInt64(int64(cI))
-		t[i] = modPQ.Add(a[i], modPQ.Mul(cIBI, x))
+	var tGMP, tTmp gmp.Int
+	for i := 0; i < Iterations; i++ {
+		tGMP.Set(a[i])
+		if c.Bit(i) == 1 {
+			tTmp.Mul(gX, gmp.NewInt(1)) // reuse Mul
+			tGMP.Add(&tGMP, &tTmp)
+		}
+		tGMP.Mod(&tGMP, &gPQ)
+		t[i] = toBig(&tGMP)
 	}
-	return &Proof{alpha, t}
+
+	return &Proof{Alpha: alpha, T: t}
 }
 
 func (p *Proof) Verify(h1, h2, N *big.Int) bool {
-	if p == nil {
+	if p == nil || N.Sign() <= 0 {
 		return false
 	}
-	if N.Sign() != 1 {
-		return false
-	}
-	modN := common.ModInt(N)
-	h1_ := new(big.Int).Mod(h1, N)
-	if h1_.Cmp(one) != 1 || h1_.Cmp(N) != -1 {
-		return false
-	}
-	h2_ := new(big.Int).Mod(h2, N)
-	if h2_.Cmp(one) != 1 || h2_.Cmp(N) != -1 {
-		return false
-	}
-	if h1_.Cmp(h2_) == 0 {
-		return false
-	}
-	for i := range p.T {
-		a := new(big.Int).Mod(p.T[i], N)
-		if a.Cmp(one) != 1 || a.Cmp(N) != -1 {
-			return false
-		}
-	}
-	for i := range p.Alpha {
-		a := new(big.Int).Mod(p.Alpha[i], N)
-		if a.Cmp(one) != 1 || a.Cmp(N) != -1 {
-			return false
-		}
-	}
-	msg := append([]*big.Int{h1, h2, N}, p.Alpha[:]...)
+
+	gH1 := toGMP(h1)
+	gH2 := toGMP(h2)
+	gN := toGMP(N)
+
+	msg := make([]*big.Int, 3+Iterations)
+	msg[0], msg[1], msg[2] = h1, h2, N
+	copy(msg[3:], p.Alpha[:])
 	c := common.SHA512_256i(msg...)
-	cIBI := new(big.Int)
+
+	// Reusable vars
+	var tGMP, alphaGMP, h1ExpTi, h2ExpCi, rhs gmp.Int
+
 	for i := 0; i < Iterations; i++ {
 		if p.Alpha[i] == nil || p.T[i] == nil {
 			return false
 		}
-		cI := c.Bit(i)
-		cIBI = cIBI.SetInt64(int64(cI))
-		h1ExpTi := modN.Exp(h1, p.T[i])
-		h2ExpCi := modN.Exp(h2, cIBI)
-		alphaIMulH2ExpCi := modN.Mul(p.Alpha[i], h2ExpCi)
-		if h1ExpTi.Cmp(alphaIMulH2ExpCi) != 0 {
+
+		tGMP.Set(toGMP(p.T[i]))
+		alphaGMP.Set(toGMP(p.Alpha[i]))
+
+		h1ExpTi.Exp(gH1, &tGMP, gN)
+
+		if c.Bit(i) == 1 {
+			h2ExpCi.Set(gH2)
+			rhs.Mul(&alphaGMP, &h2ExpCi).Mod(&rhs, gN)
+		} else {
+			rhs.Set(&alphaGMP).Mod(&rhs, gN)
+		}
+
+		if h1ExpTi.Cmp(&rhs) != 0 {
 			return false
 		}
 	}
