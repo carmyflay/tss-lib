@@ -77,17 +77,17 @@ func (p *Proof) Verify(h1, h2, N *big.Int) bool {
 	// Convert proof arrays to byte slice arrays
 	alphaList := make([][]byte, Iterations)
 	tList := make([][]byte, Iterations)
-	for tL := range tList {
-		fmt.Printf("%d \n", len(tList[tL]))
-	}
+
 	for i := 0; i < Iterations; i++ {
 		if p.Alpha[i] == nil || p.T[i] == nil {
 			return false
 		}
-		alphaList[i] = p.Alpha[i].Bytes()
-		tList[i] = p.T[i].Bytes()
+		alphaList[i] = padBytes(p.Alpha[i].Bytes(), len(NBytes))
+		tList[i] = padBytes(p.T[i].Bytes(), len(NBytes))
 	}
-
+	// for tL := range tList {
+	// 	fmt.Printf("t lengthz %d\n", len(tList[tL]))
+	// }
 	// Call the C wrapper to verify proof
 	valid, err := DLNVerify(h1Bytes, h2Bytes, NBytes, alphaList, tList, hash)
 	if err != nil {

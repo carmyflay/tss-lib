@@ -2,7 +2,6 @@ package dlnproofc
 
 import (
 	"crypto/rand"
-	"fmt"
 	"testing"
 
 	"github.com/bnb-chain/tss-lib/v2/ecdsa/keygen"
@@ -26,7 +25,6 @@ func TestVerifyDLNProofZ(t *testing.T) {
 		params.NTildei,
 		rand.Reader,
 	)
-	fmt.Printf("proof %v\n", proof)
 
 	ok := proof.Verify(params.H1i, params.H2i, params.NTildei)
 	if !ok {
